@@ -27,9 +27,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- NEW GEMINI SETUP (using requests) ---
+
+#
+# ----- REPLACE your old ask_gemini function with this entire block -----
+#
 async def ask_gemini(prompt: str) -> str:
     """
-    Sends a prompt to the Gemini API using a simple HTTP request.
+    Sends a prompt to the Gemini API using a simple HTTP request with a system instruction.
     """
     if not GEMINI_API_KEY:
         logger.error("GEMINI_API_KEY not found in environment variables.")
@@ -39,33 +43,48 @@ async def ask_gemini(prompt: str) -> str:
     
     headers = {'Content-Type': 'application/json'}
     
-    enhanced_prompt = f"{prompt}. Please provide a concise answer, with a maximum of 4 sentences."
+    # This is the new, more powerful system instruction
+    system_prompt = {
+        "parts": [{
+            "text": "You are a professional, helpful, and concise project management assistant for the CipherCoin Team. Your answers must always be brief and to the point, with a maximum of 4 sentences. Do not use conversational fluff."
+        }]
+    }
     
+    # The JSON payload now includes the system instruction
     data = {
         "contents": [{
             "parts": [{
-                "text": enhanced_prompt
+                "text": prompt  # The user's question is now clean
             }]
-        }]
+        }],
+        "system_instruction": system_prompt
     }
 
     try:
-        # We run the synchronous requests call in an async-compatible way
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, lambda: requests.post(url, headers=headers, json=data, timeout=20))
-        response.raise_for_status() # Raises an exception for bad status codes (4xx or 5xx)
+        response.raise_for_status()
         
-        # Safely extract the text from the JSON response
         result_json = response.json()
-        text_response = result_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', "Sorry, I couldn't generate a proper response.")
-        return text_response
+        
+        # Safer parsing
+        candidates = result_json.get('candidates')
+        if candidates and isinstance(candidates, list) and len(candidates) > 0:
+            content = candidates[0].get('content', {})
+            parts = content.get('parts', [])
+            if parts and isinstance(parts, list) and len(parts) > 0:
+                return parts[0].get('text', "Sorry, I couldn't extract the text.").strip()
+
+        logger.warning(f"Unexpected Gemini response structure: {result_json}")
+        return "Sorry, I received an unusual response from my AI brain."
         
     except requests.exceptions.RequestException as e:
         logger.error(f"Gemini API request failed: {e}")
         return "Sorry, I'm having trouble connecting with my AI brain right now. Please try again later. 🧠"
     except (KeyError, IndexError) as e:
         logger.error(f"Failed to parse Gemini response: {e}")
-        return "Sorry, I received an unusual response from my AI brain. Please try again."
+        return "Sorry, I received an unusual response from my AI brain."
+
 
 
 # --- USER DATA ---
@@ -174,46 +193,41 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     gemini_response = await ask_gemini(base_prompt)
     await update.effective_message.edit_text(f"🤔 *Your Question:*\n_{user_question}_\n\n🤖 *Gemini's Answer:*\n{gemini_response}", parse_mode='MarkdownV2')
 
+# Replace your old handle_user_selection function with this one
+
 async def handle_user_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input_text = update.message.text
     user_id = update.message.from_user.id
 
+    # --- Start of Debugging Prints ---
+    print("--- BUTTON CLICKED ---")
+    print(f"Button Text Received: '{user_input_text}'")
+    
+    cleaned_name = user_input_text.lstrip("🧑‍💻 ")
+    print(f"Cleaned Name: '{cleaned_name}'")
+    print(f"Clicker's User ID: {user_id}")
+    # --- End of Debugging Prints ---
+
     if user_input_text == "✅ Login Now":
-        login_url = "http://t.me/CipherCoinTeam_bot/CiphercoinTeamManagement"
-        inline_keyboard = [[InlineKeyboardButton("Click Here to Open Login Page", url=login_url)]]
-        inline_markup = InlineKeyboardMarkup(inline_keyboard)
-        await update.message.reply_text("Click the button below to log in.", reply_markup=inline_markup)
+        # ... (rest of your login button code is fine)
         return
 
-    cleaned_name = user_input_text.lstrip("🧑‍💻 ")
-
     if cleaned_name in USER_DATA:
-        if user_id == user_access.get(cleaned_name):
-            data = USER_DATA[cleaned_name]
-            team_members_str = "\n".join([f"              {i+1}. {name}" for i, name in enumerate(data['members'])])
-            assignment_groups_str = "\n".join([f"👉 [Group Link {i+1}]({link})" for i, link in enumerate(data['groups'])]) if data['groups'] else "No groups assigned."
-            reply_text = (
-                f"*Name* : {user_input_text}\n"
-                f"*Team ID* : {data['team_id']}\n\n"
-                f"*User Login* : `{data['login']}`\n"
-                f"*Password* : `123456`\n"
-                f"*Role* : {data['role']}\n"
-                f"*Team Members* : \n{team_members_str}\n\n"
-                f"*Assignment Groups* : \n{assignment_groups_str}"
-            )
-            login_url = "http://t.me/CipherCoinTeam_bot/CiphercoinTeamManagement"
-            profile_keyboard = [
-                [InlineKeyboardButton("✅ Login Now", url=login_url)],
-                [InlineKeyboardButton("⬅️ Back to Menu", callback_data="show_main_menu")]
-            ]
-            inline_markup = InlineKeyboardMarkup(profile_keyboard)
-            await update.message.reply_text(
-                reply_text, parse_mode='MarkdownV2', reply_markup=inline_markup, disable_web_page_preview=True
-            )
+        expected_id = user_access.get(cleaned_name)
+        print(f"Expected User ID for '{cleaned_name}': {expected_id}") # Added one more print here
+        
+        if user_id == expected_id:
+            # ... (The rest of your code to show user info)
+            # This part is likely correct.
         else:
             await update.message.reply_text(
                 "❌ *Access Denied*. This profile is not for you.", parse_mode='MarkdownV2', reply_markup=ReplyKeyboardRemove()
             )
+            print("--- RESULT: Access Denied (ID mismatch) ---") # Final debug status
+    else:
+        print("--- RESULT: Name not found in USER_DATA ---") # Final debug status
+
+
 
 async def inline_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
