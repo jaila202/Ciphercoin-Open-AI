@@ -1,7 +1,6 @@
 import os
 import sys
 from telethon import TelegramClient, events  # <-- FIX IS HERE
-from telethon.network import ConnectionHttp
 import google.generativeai as genai
 
 # --- 1. CONFIGURATION FOR CIPHERCOIN ---
@@ -59,14 +58,8 @@ except Exception as e:
     sys.exit(1)
 
 # Configure Telegram client for PythonAnywhere Paid Accounts
-proxy_details = ('http', 'proxy.server', 3128)
-client = TelegramClient(
-    SESSION_NAME,
-    API_ID,
-    API_HASH,
-    connection=ConnectionHttp,  # Use HTTPS connection
-    proxy=proxy_details         # Through the required proxy
-)
+# On Zeabur, no proxy or special connection is needed.
+client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 
 # --- 3. EVENT HANDLER FOR NEW MESSAGES ---
 
