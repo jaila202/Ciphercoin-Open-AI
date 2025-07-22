@@ -1,19 +1,13 @@
-#
-# This is the final version, modified to run in Termux by removing the google-generativeai dependency.
-#
-
 import os
 import datetime
 import logging
 import asyncio
-import requests # Use the requests library
-import json     # Use the json library
+import requests
+import json
+import pytz  # New import for timezones
 
-# Imports for python-telegram-bot
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from telegram import Update
-from telegram.error import TelegramError
-from telegram import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 
 # --- CONFIGURATION & TOKENS ---
 TOKEN = os.environ.get("TOKEN")
@@ -26,37 +20,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- NEW GEMINI SETUP (using requests) ---
+# --- USER DATA & STATE MANAGEMENT ---
+# Using a single structure for user data is cleaner
+USER_DATA = {
+    "Anwar":    {"id": 11111111, "team_id": "0101", "login": "anwar0101@gmail.com", "role": "Operation Team Leader", "members": ["Ajay", "Asik", "Fathah"], "groups": []},
+    "Alaudeen": {"id": 22222222, "team_id": "0102", "login": "alaudeen0102@gmail.com", "role": "Operation Team Leader", "members": ["Mujay", "Rabik", "Faizal"], "groups": ["https://t.me/penghasiluang_online1", "https://t.me/yZnNkN"]},
+    "Musaraf":  {"id": 1459790806, "team_id": "0103", "login": "musaraf0103@gmail.com", "role": "Operation Team Leader", "members": ["Mansoor", "Jassim", "Buhari"], "groups": ["https://t.me/newplatformchat", "https://t.me/epicballad_ind"]},
+    "Riyas":    {"id": 6258844344, "team_id": "0104", "login": "riyas0104@gmail.com", "role": "Operation Team Leader", "members": ["Ismail", "Yousuf", "Suhair"], "groups": ["https://t.me/madmazellilekazanmayadevam", "https://t.me/Xland_com"]},
+    "Sahul":    {"id": 7974817901, "team_id": "0105", "login": "sahul0105@gmail.com", "role": "Operation Team Leader", "members": ["Sameen", "Ajay_2", "Rahman"], "groups": ["https://t.me/+xfQQT3ZHzfNkM2Q6", "https://t.me/ALKEN_LUX_INVISTETSION_GROUP"]},
+    "Boopathi": {"id": 6028405161, "team_id": "0100", "login": "boopathi100@gmail.com", "role": "Project Manager", "members": ["Musaraf", "Sahul"], "groups": ["https://t.me/epic_balled_india", "https://t.me/RoyalWinOfficialGroup888", "https://t.me/merobit_net"]},
+    "Ijas":     {"id": 1824958978, "team_id": "0100", "login": "ijas100@gmail.com", "role": "Project Manager", "members": ["Anwar", "Alaudeen", "Riyas"], "groups": ["https://t.me/epic_balled_india", "https://t.me/RoyalWinOfficialGroup888", "https://t.me/merobit_net"]},
+    "Jaila":    {"id": 1624253775, "team_id": "0106", "login": "jaila0106@gmail.com", "role": "Operation Team Leader", "members": ["Team Member 1", "Team Member 2"], "groups": []}
+}
 
-#
-# ----- REPLACE your old ask_gemini function with this entire block -----
-#
+# In-memory attendance tracking
+# It will reset to empty every day by a scheduled job
+attendance_log = {
+    'morning': set(),
+    'evening': set()
+}
+
+# --- GEMINI API FUNCTION ---
 async def ask_gemini(prompt: str) -> str:
-    """
-    Sends a prompt to the Gemini API using a simple HTTP request with a system instruction.
-    """
     if not GEMINI_API_KEY:
-        logger.error("GEMINI_API_KEY not found in environment variables.")
-        return "Sorry, my AI configuration is missing."
+        logger.error("GEMINI_API_KEY not found.")
+        return "My AI configuration is missing."
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    
     headers = {'Content-Type': 'application/json'}
     
-    # This is the new, more powerful system instruction
     system_prompt = {
-        "parts": [{
-            "text": "You are a professional, helpful, and concise project management assistant for the CipherCoin Team. Your answers must always be brief and to the point, with a maximum of 4 sentences. Do not use conversational fluff."
-        }]
+        "parts": [{"text": "You are a professional, helpful, and concise project management assistant for the CipherCoin Team. Your answers must always be brief and to the point, with a maximum of 4 sentences. Do not use conversational fluff."}]
     }
     
-    # The JSON payload now includes the system instruction
     data = {
-        "contents": [{
-            "parts": [{
-                "text": prompt  # The user's question is now clean
-            }]
-        }],
+        "contents": [{"parts": [{"text": prompt}]}],
         "system_instruction": system_prompt
     }
 
@@ -66,202 +64,154 @@ async def ask_gemini(prompt: str) -> str:
         response.raise_for_status()
         
         result_json = response.json()
-        
-        # Safer parsing
-        candidates = result_json.get('candidates')
-        if candidates and isinstance(candidates, list) and len(candidates) > 0:
-            content = candidates[0].get('content', {})
-            parts = content.get('parts', [])
-            if parts and isinstance(parts, list) and len(parts) > 0:
-                return parts[0].get('text', "Sorry, I couldn't extract the text.").strip()
-
-        logger.warning(f"Unexpected Gemini response structure: {result_json}")
-        return "Sorry, I received an unusual response from my AI brain."
-        
-    except requests.exceptions.RequestException as e:
+        text_response = result_json.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', "Sorry, I couldn't generate a proper response.")
+        return text_response.strip()
+    except Exception as e:
         logger.error(f"Gemini API request failed: {e}")
-        return "Sorry, I'm having trouble connecting with my AI brain right now. Please try again later. 🧠"
-    except (KeyError, IndexError) as e:
-        logger.error(f"Failed to parse Gemini response: {e}")
-        return "Sorry, I received an unusual response from my AI brain."
+        return "I'm having trouble connecting to my AI brain right now."
 
+# --- NOTIFICATION & JOB FUNCTIONS ---
 
-
-# --- USER DATA ---
-# User Access Control (User Name -> User ID)
-user_access = {
-    "Anwar": 11111111, "Alaudeen": 22222222, "Musaraf": 1459790806, "Riyas": 6258844344,
-    "Sahul": 7974817901, "Boopathi": 6028405161, "Ijas": 1824958978, "Jaila": 1624253775
-}
-
-# Detailed Profile Data for Each User
-USER_DATA = {
-    "Anwar": {
-        "team_id": "0101", "login": "anwar0101@gmail.com", "role": "Operation Team Leader",
-        "members": ["Ajay", "Asik", "Fathah"], "groups": []
-    },
-    "Alaudeen": {
-        "team_id": "0102", "login": "alaudeen0102@gmail.com", "role": "Operation Team Leader",
-        "members": ["Mujay", "Rabik", "Faizal"], "groups": ["https://t.me/penghasiluang_online1", "https://t.me/yZnNkN"]
-    },
-    "Musaraf": {
-        "team_id": "0103", "login": "musaraf0103@gmail.com", "role": "Operation Team Leader",
-        "members": ["Mansoor", "Jassim", "Buhari"], "groups": ["https://t.me/newplatformchat", "https://t.me/epicballad_ind"]
-    },
-    "Riyas": {
-        "team_id": "0104", "login": "riyas0104@gmail.com", "role": "Operation Team Leader",
-        "members": ["Ismail", "Yousuf", "Suhair"], "groups": ["https://t.me/madmazellilekazanmayadevam", "https://t.me/Xland_com"]
-    },
-    "Sahul": {
-        "team_id": "0105", "login": "sahul0105@gmail.com", "role": "Operation Team Leader",
-        "members": ["Sameen", "Ajay_2", "Rahman"], "groups": ["https://t.me/+xfQQT3ZHzfNkM2Q6", "https://t.me/ALKEN_LUX_INVISTETSION_GROUP"]
-    },
-    "Boopathi": {
-        "team_id": "0100", "login": "boopathi100@gmail.com", "role": "Project Manager",
-        "members": ["Musaraf", "Sahul"], "groups": ["https://t.me/epic_balled_india", "https://t.me/RoyalWinOfficialGroup888", "https://t.me/merobit_net"]
-    },
-    "Ijas": {
-        "team_id": "0100", "login": "ijas100@gmail.com", "role": "Project Manager",
-        "members": ["Anwar", "Alaudeen", "Riyas"], "groups": ["https://t.me/epic_balled_india", "https://t.me/RoyalWinOfficialGroup888", "https://t.me/merobit_net"]
-    },
-    "Jaila": {
-        "team_id": "0106", "login": "jaila0106@gmail.com", "role": "Operation Team Leader",
-        "members": ["Team Member 1", "Team Member 2"], "groups": []
-    }
-}
-
-
-# --- NOTIFICATION JOB FUNCTIONS (Sends to ALL users) ---
-
-async def send_notification_to_all_users(context: ContextTypes.DEFAULT_TYPE, prompt: str, title: str):
-    """A generic function to generate and send a notification to all users."""
-    logger.info(f"Running job: {title}")
+async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE):
+    """Sends an hourly task reminder to all users."""
+    logger.info("Running hourly task reminder job.")
+    prompt = "Create a very brief, one-line motivational reminder for the team to stay focused on their tasks."
     message = await ask_gemini(prompt)
-    full_message = f"*{title}*\n\n{message}"
 
-    user_ids = user_access.values()
-    for user_id in user_ids:
-        try:
-            await context.bot.send_message(chat_id=user_id, text=full_message, parse_mode='MarkdownV2')
-            await asyncio.sleep(0.2)
-        except TelegramError as e:
-            logger.error(f"Failed to send message to user {user_id}: {e}")
-        except Exception as e:
-            logger.error(f"An unexpected error occurred for user {user_id}: {e}")
+    for user_data in USER_DATA.values():
+        user_id = user_data.get('id')
+        if user_id:
+            try:
+                await context.bot.send_message(chat_id=user_id, text=f"🔔 *Hourly Reminder*\n\n_{message}_", parse_mode='MarkdownV2')
+                await asyncio.sleep(0.2)
+            except Exception as e:
+                logger.error(f"Failed to send reminder to user {user_id}: {e}")
 
-
-async def send_attendance_notification(context: ContextTypes.DEFAULT_TYPE):
-    prompt = "Create a friendly and motivational morning message for the CipherCoin team, reminding them to mark their attendance. Keep it short and energetic."
-    await send_notification_to_all_users(context, prompt, "☀️ Good Morning Team!")
-
-async def send_task_update_notification(context: ContextTypes.DEFAULT_TYPE):
-    prompt = "Write a brief, encouraging message for the CipherCoin team to update their task status for the day. Emphasize the importance of teamwork and progress."
-    await send_notification_to_all_users(context, prompt, "📊 Afternoon Check-in!")
-
-async def send_reward_notification(context: ContextTypes.DEFAULT_TYPE):
-    prompt = "Compose a positive end-of-day message for the CipherCoin team. Appreciate their hard work and mention that completing tasks leads to rewards."
-    await send_notification_to_all_users(context, prompt, "🎉 Day Complete!")
-
+async def reset_attendance_job(context: ContextTypes.DEFAULT_TYPE):
+    """Resets the attendance log every day at midnight."""
+    logger.info("Resetting daily attendance logs.")
+    global attendance_log
+    attendance_log['morning'].clear()
+    attendance_log['evening'].clear()
 
 # --- BOT HANDLER FUNCTIONS ---
 
-async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_buttons = list(USER_DATA.keys())
-    user_pairs = [user_buttons[i:i + 2] for i in range(0, len(user_buttons), 2)]
-    keyboard_layout = [[KeyboardButton(f"🧑‍💻 {name}") for name in pair] for pair in user_pairs]
-    keyboard_layout.append([KeyboardButton("✅ Login Now")])
-    reply_markup = ReplyKeyboardMarkup(keyboard_layout, resize_keyboard=True, one_time_keyboard=True)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sends the main menu keyboard."""
+    user_first_name = update.message.from_user.first_name
     
-    chat_id = update.message.chat_id if update.message else update.callback_query.message.chat_id
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text="Please select your name from the keyboard below 👇\n\nOr use `/ask <your question>` for team-related queries.",
+    user_buttons = [f"🧑‍💻 {name}" for name in USER_DATA.keys()]
+    user_pairs = [user_buttons[i:i + 2] for i in range(0, len(user_buttons), 2)]
+    
+    keyboard_layout = user_pairs + [
+        [KeyboardButton("☀️ Morning Attendance"), KeyboardButton("🌙 Evening Attendance")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard_layout, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        f"Hi {user_first_name}, welcome to the CipherCoin Team Bot! Please choose an option.",
         reply_markup=reply_markup
     )
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_main_menu(update, context)
-
-async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_question = " ".join(context.args)
-    if not user_question:
-        await update.message.reply_text("Please ask a question after the command. Example: `/ask How can we improve team productivity?`")
-        return
-
-    base_prompt = f"As a project management assistant for the CipherCoin Team, answer the following question: {user_question}"
-    await update.message.reply_text("🤖 Thinking...")
-    gemini_response = await ask_gemini(base_prompt)
-    await update.effective_message.edit_text(f"🤔 *Your Question:*\n_{user_question}_\n\n🤖 *Gemini's Answer:*\n{gemini_response}", parse_mode='MarkdownV2')
-
-# Replace your old handle_user_selection function with this one
-
-async def handle_user_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_input_text = update.message.text
-    user_id = update.message.from_user.id
-
-    # --- Start of Debugging Prints ---
-    print("--- BUTTON CLICKED ---")
-    print(f"Button Text Received: '{user_input_text}'")
+async def handle_profile_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, user_name: str):
+    """Handles when a user clicks on a name button."""
+    user_first_name = update.message.from_user.first_name
+    clicked_user_id = update.message.from_user.id
     
-    cleaned_name = user_input_text.lstrip("🧑‍💻 ")
-    print(f"Cleaned Name: '{cleaned_name}'")
-    print(f"Clicker's User ID: {user_id}")
-    # --- End of Debugging Prints ---
+    profile_data = USER_DATA.get(user_name)
+    expected_user_id = profile_data.get('id')
 
-    if user_input_text == "✅ Login Now":
-        # ... (rest of your login button code is fine)
+    if clicked_user_id == expected_user_id:
+        members_str = "\n".join([f"  - {member}" for member in profile_data['members']])
+        groups_str = "\n".join([f"  - [Group Link {i+1}]({link})" for i, link in enumerate(profile_data['groups'])]) if profile_data['groups'] else "No groups assigned."
+        
+        reply_text = (
+            f"Hi {user_first_name}, here is the info for *{user_name}*:\n\n"
+            f"*Team ID*: {profile_data['team_id']}\n"
+            f"*Role*: {profile_data['role']}\n"
+            f"*Login*: `{profile_data['login']}`\n\n"
+            f"*Team Members*:\n{members_str}\n\n"
+            f"*Assignment Groups*:\n{groups_str}"
+        )
+        await update.message.reply_text(reply_text, parse_mode='MarkdownV2', disable_web_page_preview=True)
+    else:
+        await update.message.reply_text(f"Hi {user_first_name}, that's not for you! Access to *{user_name}*'s profile is denied.", parse_mode='MarkdownV2')
+
+async def handle_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the attendance buttons."""
+    user = update.message.from_user
+    user_first_name = user.first_name
+    user_id = user.id
+    button_text = update.message.text
+
+    ist = pytz.timezone('Asia/Kolkata')
+    now_ist = datetime.datetime.now(ist)
+    current_hour = now_ist.hour
+
+    if "Morning" in button_text:
+        if 6 <= current_hour < 15: # 6:00 AM to 2:59 PM
+            if user_id in attendance_log['morning']:
+                await update.message.reply_text(f"Hi {user_first_name}, you've already marked your morning attendance today.")
+            else:
+                attendance_log['morning'].add(user_id)
+                await update.message.reply_text(f"✅ Got it, {user_first_name}! Your morning attendance is marked.")
+        else:
+            await update.message.reply_text(f"Hi {user_first_name}, morning attendance can only be marked between 6 AM and 3 PM IST.")
+            
+    elif "Evening" in button_text:
+        if 18 <= current_hour < 23: # 6:00 PM to 10:59 PM
+            if user_id in attendance_log['evening']:
+                await update.message.reply_text(f"Hi {user_first_name}, you've already marked your evening attendance today.")
+            else:
+                attendance_log['evening'].add(user_id)
+                await update.message.reply_text(f"✅ Thanks, {user_first_name}! Your evening attendance is marked.")
+        else:
+            await update.message.reply_text(f"Hi {user_first_name}, evening attendance can only be marked between 6 PM and 11 PM IST.")
+
+async def route_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """The main router for all incoming text messages."""
+    message_text = update.message.text
+    user_first_name = update.message.from_user.first_name
+
+    # Check if a profile button was clicked
+    if message_text.startswith("🧑‍💻"):
+        user_name = message_text.lstrip("🧑‍💻 ").strip()
+        await handle_profile_selection(update, context, user_name)
         return
 
-    if cleaned_name in USER_DATA:
-        expected_id = user_access.get(cleaned_name)
-        print(f"Expected User ID for '{cleaned_name}': {expected_id}") # Added one more print here
-        
-        if user_id == expected_id:
-            # ... (The rest of your code to show user info)
-            # This part is likely correct.
-        else:
-            await update.message.reply_text(
-                "❌ *Access Denied*. This profile is not for you.", parse_mode='MarkdownV2', reply_markup=ReplyKeyboardRemove()
-            )
-            print("--- RESULT: Access Denied (ID mismatch) ---") # Final debug status
-    else:
-        print("--- RESULT: Name not found in USER_DATA ---") # Final debug status
+    # Check if an attendance button was clicked
+    if "Attendance" in message_text:
+        await handle_attendance(update, context)
+        return
 
-
-
-async def inline_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "show_main_menu":
-        await query.message.delete()
-        await send_main_menu(update, context)
-
+    # If it's none of the above, treat it as a direct message to the AI
+    await update.message.reply_text("🤖 Thinking...", quote=True)
+    gemini_response = await ask_gemini(message_text)
+    await update.effective_message.edit_text(f"Hi {user_first_name}, here's what I think:\n\n{gemini_response}")
 
 # --- MAIN BOT SETUP ---
 def main():
     if not TOKEN:
-        logger.critical("TELEGRAM TOKEN not found in environment variables. The bot cannot start.")
+        logger.critical("TELEGRAM TOKEN not found. The bot cannot start.")
         return
 
     app = ApplicationBuilder().token(TOKEN).build()
 
     # --- Register Handlers ---
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ask", ask_command))
-    app.add_handler(CallbackQueryHandler(inline_button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_selection))
+    # This single MessageHandler now routes all non-command text
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, route_message))
 
     # --- Schedule Daily Notification Jobs ---
     job_queue = app.job_queue
-    # All times are in UTC. India is UTC+5:30.
-    job_queue.run_daily(send_attendance_notification, time=datetime.time(hour=3, minute=30, tzinfo=datetime.timezone.utc), name="attendance_check")
-    job_queue.run_daily(send_task_update_notification, time=datetime.time(hour=8, minute=30, tzinfo=datetime.timezone.utc), name="task_update")
-    job_queue.run_daily(send_reward_notification, time=datetime.time(hour=12, minute=30, tzinfo=datetime.timezone.utc), name="reward_eod")
-
-    logger.info("Bot is running...")
+    # 1. Hourly task reminder
+    job_queue.run_repeating(send_task_reminder, interval=3600, first=30, name="hourly_reminder")
+    # 2. Daily job to reset attendance logs at midnight IST (18:30 UTC)
+    job_queue.run_daily(reset_attendance_job, time=datetime.time(hour=18, minute=30, tzinfo=datetime.timezone.utc), name="reset_attendance")
+    
+    logger.info("Bot is running with all new features...")
     app.run_polling()
 
 if __name__ == '__main__':
     main()
-                                           
+
